@@ -12,7 +12,7 @@ python archive_excel_generator.py --root "정리한 폴더 경로" --output "아
 ## 2. `import_to_supabase.py` (신규)
 
 같은 폴더 규칙을 그대로 재사용해서 Supabase(`posts`/`tags`/`post_tags`/`post_images`)에
-데이터를 upsert하고, 이미지 파일을 Next.js 레포의 정적 폴더로 복사한다.
+데이터를 upsert하고, 이미지 파일을 이 레포의 `public/images/`(Next.js 정적 폴더)로 복사한다.
 
 - 폴더 조합(연도/대분류/중분류/출처/비고) 하나 = 게시물(post) 하나. 그 안의 파일들이
   `post_images`로 들어간다.
@@ -42,15 +42,15 @@ export SUPABASE_SERVICE_ROLE_KEY="..."   # 절대 프론트/브라우저에 노�
 # 1) 먼저 dry-run으로 실행 계획만 확인 (DB/파일 변경 없음)
 python scripts/import_to_supabase.py \
   --root "정리한 폴더 경로" \
-  --images-dest "../bws-web/public/images" \
+  --images-dest "public/images" \
   --dry-run
 
 # 2) 문제 없으면 --dry-run 빼고 실제 실행
 python scripts/import_to_supabase.py \
   --root "정리한 폴더 경로" \
-  --images-dest "../bws-web/public/images"
+  --images-dest "public/images"
 ```
 
-`--images-dest`는 Next.js 프로젝트의 이미지 폴더를 가리키면 된다(예: `public/images`).
-DB에는 상대경로만 저장되므로, 나중에 이미지를 Cloudinary 등으로 옮길 때도 프론트의
-base URL 설정만 바꾸면 된다.
+`--images-dest`는 이 레포의 Next.js 이미지 폴더(`public/images`)를 가리키면 된다. DB에는
+상대경로만 저장되므로, 나중에 이미지를 Cloudinary 등으로 옮길 때도 `src/lib/image.ts`의
+base 경로만 바꾸면 된다.

@@ -18,7 +18,8 @@ export interface Database {
           sort_order?: number;
           created_at?: string;
         };
-        Update: Partial<Database['public']['Tables']['categories']['Insert']>;
+        Update: Partial<Database["public"]["Tables"]["categories"]["Insert"]>;
+        Relationships: [];
       };
       tag_groups: {
         Row: {
@@ -35,7 +36,8 @@ export interface Database {
           sort_order?: number;
           created_at?: string;
         };
-        Update: Partial<Database['public']['Tables']['tag_groups']['Insert']>;
+        Update: Partial<Database["public"]["Tables"]["tag_groups"]["Insert"]>;
+        Relationships: [];
       };
       tags: {
         Row: {
@@ -56,7 +58,8 @@ export interface Database {
           sort_order?: number;
           created_at?: string;
         };
-        Update: Partial<Database['public']['Tables']['tags']['Insert']>;
+        Update: Partial<Database["public"]["Tables"]["tags"]["Insert"]>;
+        Relationships: [];
       };
       posts: {
         Row: {
@@ -68,6 +71,7 @@ export interface Database {
           taken_at: string | null;
           source_url: string | null;
           is_published: boolean;
+          import_key: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -80,10 +84,12 @@ export interface Database {
           taken_at?: string | null;
           source_url?: string | null;
           is_published?: boolean;
+          import_key?: string | null;
           created_at?: string;
           updated_at?: string;
         };
-        Update: Partial<Database['public']['Tables']['posts']['Insert']>;
+        Update: Partial<Database["public"]["Tables"]["posts"]["Insert"]>;
+        Relationships: [];
       };
       post_images: {
         Row: {
@@ -106,7 +112,8 @@ export interface Database {
           alt_text?: string | null;
           created_at?: string;
         };
-        Update: Partial<Database['public']['Tables']['post_images']['Insert']>;
+        Update: Partial<Database["public"]["Tables"]["post_images"]["Insert"]>;
+        Relationships: [];
       };
       post_tags: {
         Row: {
@@ -117,17 +124,21 @@ export interface Database {
           post_id: string;
           tag_id: string;
         };
-        Update: Partial<Database['public']['Tables']['post_tags']['Insert']>;
+        Update: Partial<Database["public"]["Tables"]["post_tags"]["Insert"]>;
+        Relationships: [];
       };
     };
+    Views: Record<string, never>;
     Functions: {
       filter_posts: {
         Args: {
           p_category_slug?: string | null;
           p_tag_ids?: string[];
         };
-        Returns: Database['public']['Tables']['posts']['Row'][];
+        Returns: Database["public"]["Tables"]["posts"]["Row"][];
       };
     };
+    Enums: Record<string, never>;
+    CompositeTypes: Record<string, never>;
   };
 }
