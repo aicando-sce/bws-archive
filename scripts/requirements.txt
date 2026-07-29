@@ -1,0 +1,4 @@
+openpyxl
+pillow
+opencv-python-headless
+supabase

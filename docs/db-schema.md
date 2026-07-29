@@ -84,18 +84,25 @@ erDiagram
 | `post_images` | 게시물 내 다중 이미지 |
 | `post_tags` | Post↔Tag 다대다 조인 |
 
-## 폴더/엑셀 자동화와의 매핑 (예상)
+## 폴더 자동화와의 매핑 (구현 완료)
 
-`archive_excel_generator.py`가 만드는 엑셀의 폴더 구조가 `연도/대분류/중분류/출처/비고`라고 하셨으니, 임포트 스크립트에서는 대략 이렇게 매핑하면 됩니다.
+`archive_excel_generator.py`의 폴더 규칙(`루트/연도/대분류/중분류/출처/비고/파일`)을 그대로
+재사용하는 `scripts/import_to_supabase.py`가 다음과 같이 매핑한다.
 
-1. 대분류 → `categories.slug` 조회해서 `posts.category_id`
-2. 중분류(드라마명/브랜드명 등) → `tags` upsert(`group=subcategory`, `category_id=해당 카테고리`) 후 `post_tags` 연결
-3. 연도 → `tags` upsert(`group=year`, `category_id=null`) 후 `post_tags` 연결
-4. 출처 → 이미 시드된 `tags`(`group=source`)에서 slug 매칭 후 `post_tags` 연결
-5. 비고 → `tags` upsert(`group=note`, `category_id=null`) 후 `post_tags` 연결
-6. 폴더 내 이미지 파일들 → `post_images` 각 행, GitHub 커밋 경로를 `image_path`로 저장
+1. 같은 (연도, 대분류, 중분류, 출처, 비고) 폴더 조합 = 게시물(post) 1개. 폴더 경로를
+   `posts.import_key`로 저장해 재실행 시 upsert 기준으로 사용.
+2. 대분류 → `CATEGORY_FOLDER_MAP`(작품→work, 앰버서더→ambassador, 기타활동→other)으로
+   `categories.slug` 조회 후 `posts.category_id`. 매핑에 없는 대분류 값은 건너뛰고 목록으로 알려줌.
+3. 중분류(드라마명/브랜드명 등, "N/A"가 아닐 때만) → `tags` upsert(`group=subcategory`,
+   `category_id=해당 카테고리`) 후 `post_tags` 연결
+4. 연도 → `tags` upsert(`group=year`, `category_id=null`) 후 `post_tags` 연결
+5. 출처("N/A"가 아닐 때만) → `tags`에서 이름으로 조회(이미 시드된 항목과 매칭) 후 없으면
+   생성, `post_tags` 연결
+6. 비고("N/A"가 아닐 때만) → `tags` upsert(`group=note`, `category_id=null`) 후 `post_tags` 연결
+7. 폴더 내 이미지 파일들 → 지정한 대상 폴더(`--images-dest`)로 복사하면서 `post_images`에
+   상대경로(`image_path`)로 upsert(재실행 시 중복 방지). 첫 번째 이미지를 `cover_image_path`로 지정
 
-엑셀 컬럼 구조를 알려주시면 이 매핑에 맞춘 파이썬 임포트 스크립트(Supabase service_role 키로 upsert)도 이어서 만들어 드릴 수 있습니다.
+자세한 사용법은 [`scripts/README.md`](../scripts/README.md) 참고.
 
 ## Next.js 조회 예시
 

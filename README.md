@@ -5,8 +5,8 @@
 ## 진행 상황
 
 - [x] DB 스키마 설계 (`supabase/migrations/`, `docs/db-schema.md`)
+- [x] 폴더 → Supabase 임포트 스크립트 (`scripts/import_to_supabase.py`)
 - [ ] Next.js 프로젝트 스캐폴딩
-- [ ] 폴더/엑셀(`archive_excel_generator.py`) → Supabase 임포트 스크립트
 - [ ] 프론트엔드(목록/필터/상세)
 - [ ] 배포 (Vercel)
 
@@ -27,3 +27,10 @@ supabase db push
 ```
 
 또는 Supabase 대시보드 SQL Editor에서 `supabase/migrations/` 안의 파일을 순서대로 실행.
+
+## 폴더 → Supabase 임포트
+
+`scripts/import_to_supabase.py`가 `scripts/archive_excel_generator.py`와 같은 폴더 규칙
+(`루트/연도/대분류/중분류/출처/비고/파일`)을 그대로 재사용해서, 같은 폴더 조합에 속한
+파일들을 게시물(post) 하나로 묶어 Supabase에 upsert하고 이미지를 지정한 폴더로 복사한다.
+재실행해도 안전(idempotent)하다. 자세한 사용법은 [`scripts/README.md`](./scripts/README.md) 참고.
