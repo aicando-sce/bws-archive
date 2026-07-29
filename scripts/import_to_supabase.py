@@ -4,33 +4,36 @@
 
 archive_excel_generator.py와 동일한 폴더 규칙(루트/연도/대분류/중분류/출처/비고/파일)을
 그대로 재사용해서, 같은 (연도,대분류,중분류,출처,비고) 폴더 조합에 속한 파일들을
-하나의 게시물(post)로 묶어 Supabase에 upsert하고, 이미지 파일은 Next.js 레포의
-정적 폴더로 복사한다.
+하나의 게시물(post)로 묶어 Supabase에 upsert하고, 사진은 리사이즈한 뒤
+Cloudflare R2(무료 10GB, 다운로드 트래픽 무료)에 업로드한다.
 
 여러 번 실행해도 안전하다(idempotent): 게시물은 폴더 경로(import_key)로,
-이미지는 복사 경로(image_path)로 upsert된다.
+이미지는 R2에 올라간 경로(image_path)로 upsert된다. 이미 올라간 파일은 다시
+업로드하지 않는다.
 
 사전 준비:
     1. supabase/migrations/ 를 프로젝트에 적용해서 categories/tag_groups/tags 시드까지 끝낸 상태여야 함
     2. pip install -r scripts/requirements.txt
-    3. 환경변수 SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY 설정
-       (SERVICE_ROLE 키는 RLS를 우회하므로 절대 프론트/브라우저에 노출하지 말 것)
+    3. 환경변수 설정 (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, R2_ACCOUNT_ID,
+       R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, R2_PUBLIC_BASE_URL)
+       (SERVICE_ROLE 키/R2 키는 RLS·버킷을 완전히 우회하므로 절대 프론트/브라우저에 노출하지 말 것)
 
 사용법:
-    python scripts/import_to_supabase.py \
-        --root "정리한 폴더 경로" \
-        --images-dest "../bws-web/public/images" \
-        --dry-run   # 먼저 계획만 확인, 이상 없으면 --dry-run 빼고 재실행
+    python scripts/import_to_supabase.py --root "정리한 폴더 경로" --dry-run
+    # 계획이 맞으면 --dry-run 빼고 재실행
+    python scripts/import_to_supabase.py --root "정리한 폴더 경로"
 """
 
 import argparse
+import io
 import os
-import shutil
 import sys
 from collections import defaultdict
 from pathlib import Path
 
-from archive_excel_generator import FIELD_ORDER, collect_files, parse_folder_fields
+from PIL import Image as PILImage
+
+from archive_excel_generator import FIELD_ORDER, PHOTO_EXTS, collect_files, parse_folder_fields
 
 # 폴더의 '대분류' 값 -> categories.slug 매핑.
 # 폴더명이 정확히 이 키와 일치해야 매핑된다 (예: '작품', '앰버서더', '기타활동').
@@ -40,16 +43,35 @@ CATEGORY_FOLDER_MAP = {
     "기타활동": "other",
 }
 
+# 원본 해상도를 그대로 올리면 5000장 기준 R2 무료 용량(10GB)을 훌쩍 넘기기 쉬워서,
+# 웹에서 보기에 충분한 크기로 줄여서 올린다. 필요하면 값만 조정하면 됨.
+MAX_IMAGE_DIMENSION = 2000
+JPEG_QUALITY = 85
+
 
 def build_import_key(fields: dict) -> str:
     return "/".join(fields[k] for k in FIELD_ORDER)
 
 
-def build_repo_relative_path(fields: dict, filename: str) -> str:
-    # 'N/A'인 단계는 실제 폴더가 없었던 것이므로 복사 경로에서 제외
-    parts = [fields[k] for k in FIELD_ORDER if fields[k] != "N/A"]
-    parts.append(filename)
+def build_object_key(fields: dict, filename: str) -> str:
+    # 'N/A'인 단계는 실제 폴더가 없었던 것이므로 경로에서 제외
+    parts = ["archive"] + [fields[k] for k in FIELD_ORDER if fields[k] != "N/A"]
+    stem = Path(filename).stem
+    ext = Path(filename).suffix.lower()
+    # 사진은 리사이즈하면서 jpg로 통일 저장 (원본이 png/heic 등이어도 jpg로 변환)
+    if ext in PHOTO_EXTS:
+        ext = ".jpg"
+    parts.append(f"{stem}{ext}")
     return "/".join(parts)
+
+
+def resize_photo_bytes(src_path: Path) -> bytes:
+    with PILImage.open(src_path) as img:
+        img = img.convert("RGB")
+        img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION))
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=JPEG_QUALITY)
+        return buf.getvalue()
 
 
 def group_files(files):
@@ -139,6 +161,11 @@ def upsert_post_image(sb, post_id: str, image_path: str, sort_order: int):
     ).execute()
 
 
+def image_already_uploaded(sb, image_path: str) -> bool:
+    res = sb.table("post_images").select("id").eq("image_path", image_path).limit(1).execute()
+    return bool(res.data)
+
+
 def run_dry_run(plan, unmapped):
     for fields, cat_slug, fpaths in plan:
         print(
@@ -151,10 +178,10 @@ def run_dry_run(plan, unmapped):
             print(f"  - '{name}': {cnt}개 파일")
 
 
-def run_import(sb, plan, images_dest: Path):
+def run_import(sb, r2_client, r2_bucket: str, r2_public_base_url: str, plan):
     category_cache = {}
     group_cache = {}
-    created_posts = updated_posts = copied_images = 0
+    created_posts = updated_posts = uploaded_images = skipped_images = 0
 
     for fields, cat_slug, fpaths in plan:
         category_id = get_or_create_category(sb, category_cache, cat_slug)
@@ -182,27 +209,37 @@ def run_import(sb, plan, images_dest: Path):
         fpaths_sorted = sorted(fpaths, key=lambda p: p.name.lower())
         cover_path = None
         for i, fpath in enumerate(fpaths_sorted):
-            rel_path = build_repo_relative_path(fields, fpath.name)
-            dest_path = images_dest / rel_path
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(fpath, dest_path)
-            copied_images += 1
-            upsert_post_image(sb, post_id, rel_path, i)
+            key = build_object_key(fields, fpath.name)
+            image_url = f"{r2_public_base_url}/{key}"
+
+            if image_already_uploaded(sb, image_url):
+                skipped_images += 1
+            else:
+                if fpath.suffix.lower() in PHOTO_EXTS:
+                    body = resize_photo_bytes(fpath)
+                    content_type = "image/jpeg"
+                else:
+                    body = fpath.read_bytes()
+                    content_type = "application/octet-stream"
+                r2_client.put_object(Bucket=r2_bucket, Key=key, Body=body, ContentType=content_type)
+                uploaded_images += 1
+
+            upsert_post_image(sb, post_id, image_url, i)
             if cover_path is None:
-                cover_path = rel_path
+                cover_path = image_url
 
         if cover_path:
             sb.table("posts").update({"cover_image_path": cover_path}).eq("id", post_id).execute()
 
-    print(f"완료: post {created_posts}개 생성 / {updated_posts}개 갱신, 이미지 {copied_images}개 복사")
+    print(
+        f"완료: post {created_posts}개 생성 / {updated_posts}개 갱신, "
+        f"이미지 {uploaded_images}개 업로드 ({skipped_images}개는 이미 있어서 건너뜀)"
+    )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="폴더 아카이브를 Supabase로 임포트")
+    parser = argparse.ArgumentParser(description="폴더 아카이브를 Supabase + R2로 임포트")
     parser.add_argument("--root", required=True, help="정리한 최상위 루트 폴더 경로")
-    parser.add_argument(
-        "--images-dest", required=True, help="이미지를 복사할 Next.js 레포 내 폴더 (예: ../web/public/images)"
-    )
     parser.add_argument("--dry-run", action="store_true", help="DB/파일 변경 없이 실행 계획만 출력")
     args = parser.parse_args()
 
@@ -233,17 +270,47 @@ def main():
         print("supabase 패키지가 없습니다: pip install -r scripts/requirements.txt")
         sys.exit(1)
 
-    supabase_url = os.environ.get("SUPABASE_URL")
-    supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-    if not supabase_url or not supabase_key:
-        print("환경변수 SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY 를 설정하세요.")
+    try:
+        import boto3
+    except ImportError:
+        print("boto3 패키지가 없습니다: pip install -r scripts/requirements.txt")
         sys.exit(1)
 
-    images_dest = Path(args.images_dest).expanduser().resolve()
-    images_dest.mkdir(parents=True, exist_ok=True)
+    supabase_url = os.environ.get("SUPABASE_URL")
+    supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    r2_account_id = os.environ.get("R2_ACCOUNT_ID")
+    r2_access_key_id = os.environ.get("R2_ACCESS_KEY_ID")
+    r2_secret_access_key = os.environ.get("R2_SECRET_ACCESS_KEY")
+    r2_bucket = os.environ.get("R2_BUCKET_NAME")
+    r2_public_base_url = os.environ.get("R2_PUBLIC_BASE_URL")
+
+    missing = [
+        name
+        for name, value in [
+            ("SUPABASE_URL", supabase_url),
+            ("SUPABASE_SERVICE_ROLE_KEY", supabase_key),
+            ("R2_ACCOUNT_ID", r2_account_id),
+            ("R2_ACCESS_KEY_ID", r2_access_key_id),
+            ("R2_SECRET_ACCESS_KEY", r2_secret_access_key),
+            ("R2_BUCKET_NAME", r2_bucket),
+            ("R2_PUBLIC_BASE_URL", r2_public_base_url),
+        ]
+        if not value
+    ]
+    if missing:
+        print(f"환경변수 {', '.join(missing)} 를 설정하세요.")
+        sys.exit(1)
 
     sb = create_client(supabase_url, supabase_key)
-    run_import(sb, plan, images_dest)
+    r2_client = boto3.client(
+        "s3",
+        endpoint_url=f"https://{r2_account_id}.r2.cloudflarestorage.com",
+        aws_access_key_id=r2_access_key_id,
+        aws_secret_access_key=r2_secret_access_key,
+        region_name="auto",
+    )
+
+    run_import(sb, r2_client, r2_bucket, r2_public_base_url.rstrip("/"), plan)
 
 
 if __name__ == "__main__":

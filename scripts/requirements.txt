@@ -2,3 +2,4 @@ openpyxl
 pillow
 opencv-python-headless
 supabase
+boto3

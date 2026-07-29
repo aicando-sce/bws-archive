@@ -1,8 +1,11 @@
-// DB에는 GitHub 레포(현재는 이 Next.js 레포의 public/images) 기준 상대경로만 저장한다.
-// 나중에 Cloudinary 등으로 옮길 때도 이 함수만 바꾸면 된다.
-export function imagePath(relativePath: string | null): string | null {
-  if (!relativePath) return null;
-  const encoded = relativePath
+// image_path에는 두 종류가 섞여 들어올 수 있다:
+// 1) 이 레포 public/images/ 기준 상대경로 (파이썬 스크립트로 GitHub에 올린 기존 이미지)
+// 2) Cloudflare R2 공개 URL 전체 (관리자 페이지에서 업로드한 이미지)
+// 절대 URL이면 그대로 쓰고, 아니면 상대경로로 취급해 /images/ 밑에서 찾는다.
+export function imagePath(path: string | null): string | null {
+  if (!path) return null;
+  if (/^https?:\/\//.test(path)) return path;
+  const encoded = path
     .split("/")
     .map((segment) => encodeURIComponent(segment))
     .join("/");
